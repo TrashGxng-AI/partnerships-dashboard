@@ -1,0 +1,512 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Trash Gxng — Partnerships KPI Tracker</title>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/react/18.2.0/umd/react.production.min.js"></script>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/react-dom/18.2.0/umd/react-dom.production.min.js"></script>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/babel-standalone/7.23.2/babel.min.js"></script>
+  <script src="https://cdn.tailwindcss.com"></script>
+  <style>
+    body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif; }
+    .bar-fill { transition: width 0.4s ease; }
+    @keyframes spin { to { transform: rotate(360deg); } }
+    .spin { animation: spin 0.8s linear infinite; }
+  </style>
+</head>
+<body class="bg-gray-50">
+<div id="root"></div>
+
+<script type="text/babel">
+const { useState, useEffect } = React;
+
+// ═══════════════════════════════════════════════════════════════
+// STEP 1 — Paste your Apps Script Web App URL here
+// (see setup instructions — deploy the relay script from your sheet)
+// ═══════════════════════════════════════════════════════════════
+const SHEET_CSV_URL = "https://script.google.com/macros/s/AKfycbz5WeJLQ54wzZSCLULY0TXyUSWQd58zTCr4twPrswjBEh4lH6k13HwUKPm8ybA2fFCf/exec";
+
+// ═══════════════════════════════════════════════════════════════
+// STEP 2 — Paste the normal edit link to your Google Sheet here
+// ═══════════════════════════════════════════════════════════════
+const SHEET_EDIT_URL = "https://docs.google.com/spreadsheets/d/e/2PACX-1vTRqP8tBrRvFzQ7aZfv8Q7dzgQeLz2gHN_69u4bzbU3e2C6U-zBvD7qmaDM0qElXKmuiR8Kg1InbbHm/pubhtml";
+
+// ═══════════════════════════════════════════════════════════════
+// TARGETS — edit when benchmarks change
+// ═══════════════════════════════════════════════════════════════
+const TARGETS = {
+  // Weekly
+  crmContacts:      2,
+  outreachActions:  5,
+  retailPartners:   1,
+  linkedinContacts: 5,
+  // Monthly
+  stakeholderMeetings: 2,
+  partnershipConvos:   1,
+  confirmedOpps:       1,
+  featuresProgressed:  1,
+  retailConvos:        1,
+  retailTestOpps:      1,
+  collabLeads:         1,
+  networkingEvents:    1,
+};
+
+// ═══════════════════════════════════════════════════════════════
+// RAG helpers
+// ═══════════════════════════════════════════════════════════════
+const RAG = {
+  green: { bg: "bg-green-100", text: "text-green-800", bar: "bg-green-500",  label: "On Track"  },
+  amber: { bg: "bg-yellow-100",text: "text-yellow-800",bar: "bg-yellow-400", label: "Close"     },
+  red:   { bg: "bg-red-100",   text: "text-red-800",   bar: "bg-red-500",    label: "Off Track" },
+  grey:  { bg: "bg-gray-100",  text: "text-gray-500",  bar: "bg-gray-200",   label: "N/A"       },
+};
+
+function getRag(p) {
+  if (p === null || p === undefined) return "grey";
+  if (p >= 85) return "green";
+  if (p >= 60) return "amber";
+  return "red";
+}
+function calcPct(actual, target) {
+  if (!target || actual === null || actual === undefined) return null;
+  return Math.min(Math.round((actual / target) * 100), 150);
+}
+
+// ═══════════════════════════════════════════════════════════════
+// CSV parser — handles quoted cells containing commas or newlines
+// Column order (A=0 … Q=16):
+//  0  Week
+//  1  CRM Contacts Added          2  Outreach & Follow-up Actions
+//  3  Retail Partners Researched  4  LinkedIn Contacts Added
+//  5  All Contacts Logged 48hrs?
+//  6  Stakeholder Meetings        7  New Partnership Convos
+//  8  Confirmed Opps              9  External Features/Speaking
+// 10  New Retail Convos          11  Retail Test Opp Progressed
+// 12  Collab Lead Identified     13  Networking Events Attended
+// 14  LinkedIn Post Published?   15  Pipeline Update Produced?
+// 16  Template Created/Improved?
+// ═══════════════════════════════════════════════════════════════
+function parseCSV(text) {
+  const rows = [];
+  let row = [], cur = '', inQ = false;
+  const t = text.replace(/\r\n/g, '\n').replace(/\r/g, '\n');
+  for (let i = 0; i < t.length; i++) {
+    const ch = t[i];
+    if (inQ) {
+      if (ch === '"') {
+        if (t[i + 1] === '"') { cur += '"'; i++; }
+        else { inQ = false; }
+      } else { cur += ch; }
+    } else {
+      if      (ch === '"')  { inQ = true; }
+      else if (ch === ',')  { row.push(cur.trim()); cur = ''; }
+      else if (ch === '\n') { row.push(cur.trim()); rows.push(row); row = []; cur = ''; }
+      else { cur += ch; }
+    }
+  }
+  row.push(cur.trim());
+  if (row.some(c => c !== '')) rows.push(row);
+  return rows;
+}
+
+function toNum(v)  { if (v === '' || v === undefined || v === null) return 0; return Number(v) || 0; }
+function toBool(v) { if (!v) return false; return ['true','yes','1','y'].includes(String(v).toLowerCase().trim()); }
+
+function loadSheetData(text) {
+  const rows = parseCSV(text);
+  const dataRows = rows.slice(2).filter(r => r[0]?.trim());
+  const weeks = [], data = {};
+  dataRows.forEach(c => {
+    const wk = c[0]?.trim();
+    if (!wk) return;
+    weeks.push(wk);
+    data[wk] = {
+      crmContacts:         toNum(c[1]),
+      outreachActions:     toNum(c[2]),
+      retailPartners:      toNum(c[3]),
+      linkedinContacts:    toNum(c[4]),
+      allLogged:           toBool(c[5]),
+      stakeholderMeetings: toNum(c[6]),
+      partnershipConvos:   toNum(c[7]),
+      confirmedOpps:       toNum(c[8]),
+      featuresProgressed:  toNum(c[9]),
+      retailConvos:        toNum(c[10]),
+      retailTestOpps:      toNum(c[11]),
+      collabLeads:         toNum(c[12]),
+      networkingEvents:    toNum(c[13]),
+      linkedinPost:        toBool(c[14]),
+      pipelineUpdate:      toBool(c[15]),
+      templateImproved:    toBool(c[16]),
+    };
+  });
+  return { weeks, data };
+}
+
+// ═══════════════════════════════════════════════════════════════
+// Components
+// ═══════════════════════════════════════════════════════════════
+function KpiRow({ label, actual, target, unit = "", yesNo = false, val = null, monthly = false }) {
+  let p, display;
+  if (yesNo) {
+    p = val ? 100 : 0;
+    display = val ? "✓  Done" : "✗  Not done";
+  } else {
+    p = calcPct(actual, target);
+    display = actual !== null && actual !== undefined ? `${actual}${unit}  /  ${target}${unit}` : "— not entered";
+  }
+  const key = getRag(p);
+  const c = RAG[key];
+  return (
+    <div className="flex items-center gap-3 py-2.5 border-b border-gray-50 last:border-0">
+      <div className="flex-1 min-w-0">
+        <div className="flex items-center gap-1.5 flex-wrap">
+          <span className="text-sm text-gray-700">{label}</span>
+          {monthly && <span className="text-xs text-gray-400 bg-gray-100 rounded px-1.5 py-0.5">monthly</span>}
+        </div>
+        <div className={`text-xs font-semibold mt-0.5 ${c.text}`}>{display}</div>
+      </div>
+      <div className="flex items-center gap-2 shrink-0">
+        <div className="w-16 h-1.5 rounded-full bg-gray-100">
+          <div className={`h-1.5 rounded-full bar-fill ${c.bar}`} style={{ width: `${Math.min(p ?? 0, 100)}%` }} />
+        </div>
+        <span className={`text-xs px-2 py-0.5 rounded-full font-semibold whitespace-nowrap ${c.bg} ${c.text}`}>{c.label}</span>
+      </div>
+    </div>
+  );
+}
+
+function SectionCard({ title, color, kpis }) {
+  const [open, setOpen] = useState(true);
+  const rags = kpis.map(k => {
+    if (k.yesNo) return k.val ? "green" : "red";
+    return getRag(calcPct(k.actual, k.target));
+  });
+  const onTrack = rags.filter(r => r === "green").length;
+  const overall = rags.includes("red") ? "red" : rags.includes("amber") ? "amber" : "green";
+  const c = RAG[overall];
+  return (
+    <div className="bg-white rounded-2xl shadow-sm border border-gray-100 overflow-hidden">
+      <button onClick={() => setOpen(o => !o)}
+        className="w-full px-5 py-4 flex items-center justify-between gap-3 text-left hover:opacity-90 transition-opacity"
+        style={{ backgroundColor: color }}>
+        <div className="text-white font-bold text-sm leading-tight">{title}</div>
+        <div className="flex items-center gap-2 shrink-0">
+          <span className={`text-xs font-bold px-2 py-1 rounded-full ${c.bg} ${c.text}`}>{onTrack}/{rags.length} on track</span>
+          <span className="text-white opacity-60 text-sm">{open ? "▲" : "▼"}</span>
+        </div>
+      </button>
+      {open && (
+        <div className="px-5 py-2">
+          {kpis.map((k, i) => <KpiRow key={i} {...k} />)}
+        </div>
+      )}
+    </div>
+  );
+}
+
+function WeekHealth({ d }) {
+  const T = TARGETS;
+  const checks = [
+    d.crmContacts      >= T.crmContacts,
+    d.outreachActions  >= T.outreachActions,
+    d.retailPartners   >= T.retailPartners,
+    d.linkedinContacts >= T.linkedinContacts,
+    d.allLogged,
+  ];
+  const met   = checks.filter(Boolean).length;
+  const total = checks.length;
+  const pct   = Math.round((met / total) * 100);
+  const key   = pct >= 85 ? "green" : pct >= 60 ? "amber" : "red";
+  const c     = RAG[key];
+  return (
+    <div className={`rounded-2xl px-5 py-4 flex items-center justify-between ${c.bg}`}>
+      <div>
+        <div className={`text-xs font-bold uppercase tracking-wider ${c.text}`}>Weekly Activity Health</div>
+        <div className={`text-3xl font-black mt-1 ${c.text}`}>{pct}%</div>
+        <div className={`text-xs mt-1 ${c.text} opacity-80`}>{met} of {total} weekly targets hit this week</div>
+      </div>
+      <svg viewBox="0 0 36 36" className="w-16 h-16 -rotate-90">
+        <circle cx="18" cy="18" r="15.9" fill="none" stroke="rgba(0,0,0,0.1)" strokeWidth="3.5"/>
+        <circle cx="18" cy="18" r="15.9" fill="none" strokeWidth="3.5"
+          strokeDasharray={`${pct} ${100 - pct}`} strokeLinecap="round"
+          className={key === "green" ? "stroke-green-600" : key === "amber" ? "stroke-yellow-500" : "stroke-red-500"}
+        />
+      </svg>
+    </div>
+  );
+}
+
+function HowToUpdate() {
+  const connected = SHEET_EDIT_URL && SHEET_CSV_URL;
+  return (
+    <div className="space-y-4 max-w-xl">
+      {connected ? (
+        <a href={SHEET_EDIT_URL} target="_blank" rel="noopener noreferrer"
+          className="flex items-center justify-between bg-green-600 hover:bg-green-700 text-white rounded-2xl px-6 py-5 no-underline transition-colors">
+          <div>
+            <div className="font-black text-base leading-tight">📊  Open Partnerships KPI Sheet</div>
+            <div className="text-green-200 text-xs mt-1">Fill in this week's numbers → dashboard updates automatically</div>
+          </div>
+          <span className="text-2xl ml-4">→</span>
+        </a>
+      ) : (
+        <div className="bg-yellow-50 border-2 border-dashed border-yellow-400 rounded-2xl px-6 py-5 text-center space-y-1">
+          <div className="text-2xl">📊</div>
+          <div className="font-bold text-yellow-800 text-sm">Google Sheet not connected yet</div>
+          <div className="text-yellow-600 text-xs">Follow the one-time setup steps below</div>
+        </div>
+      )}
+      <div className="bg-black text-white rounded-2xl p-5 space-y-4">
+        <p className="text-yellow-400 font-black text-sm uppercase tracking-widest">How it works</p>
+        {[
+          ["📅", "Weekly columns (blue)", "Filled every week — CRM contacts, outreach actions, retail research, LinkedIn contacts, and logging discipline."],
+          ["📆", "Monthly columns (all others)", "Filled once per month in that week's row — meetings, pipeline conversations, events, LinkedIn posts, and system checks."],
+          ["⚡", "Dashboard auto-updates", "Refresh the page after John fills in numbers and everything updates instantly."],
+        ].map(([icon, title, desc]) => (
+          <div key={title} className="flex gap-3 text-sm">
+            <span className="text-base shrink-0">{icon}</span>
+            <div>
+              <span className="text-yellow-400 font-semibold">{title}: </span>
+              <span className="text-gray-300">{desc}</span>
+            </div>
+          </div>
+        ))}
+      </div>
+      <div className="bg-white rounded-2xl p-5 border border-gray-100 shadow-sm space-y-3">
+        <p className="font-bold text-sm text-gray-800">One-time setup</p>
+        <ol className="text-sm text-gray-600 space-y-2 list-decimal list-inside">
+          <li>Create a new Google Sheet for John's KPIs.</li>
+          <li>Go to <strong>Extensions → Apps Script</strong>, paste the setup script and click <strong>Run → setupKPITracker</strong>.</li>
+          <li>Go to <strong>File → Share → Publish to web → Entire Document → CSV</strong> and copy the link into <code>SHEET_CSV_URL</code> in this file.</li>
+          <li>Paste the normal sheet edit link into <code>SHEET_EDIT_URL</code>.</li>
+          <li>Share the sheet with John (Editor access).</li>
+        </ol>
+      </div>
+      <div className="bg-white rounded-2xl p-5 border border-gray-100 shadow-sm space-y-3">
+        <p className="font-bold text-sm text-gray-800">Every week (John fills in)</p>
+        <ol className="text-sm text-gray-600 space-y-2 list-decimal list-inside">
+          <li>Open the sheet using the button above.</li>
+          <li>Find the current week row and fill in the <strong>blue weekly columns</strong>.</li>
+          <li>At the end of each month, fill in the <strong>monthly columns</strong> in the last week row of that month.</li>
+          <li>Done — refresh the dashboard to see updated numbers.</li>
+        </ol>
+      </div>
+    </div>
+  );
+}
+
+// ═══════════════════════════════════════════════════════════════
+// Main App
+// ═══════════════════════════════════════════════════════════════
+function App() {
+  const [weeks, setWeeks]   = useState([]);
+  const [data, setData]     = useState({});
+  const [week, setWeek]     = useState(null);
+  const [tab, setTab]       = useState("kpis");
+  const [status, setStatus] = useState("loading");
+
+  useEffect(() => {
+    if (!SHEET_CSV_URL) { setStatus("nourl"); return; }
+
+    fetch(SHEET_CSV_URL)
+      .then(r => { if (!r.ok) throw new Error("http_" + r.status); return r.text(); })
+      .then(text => {
+        const { weeks: w, data: d } = loadSheetData(text);
+        if (!w.length) throw new Error("empty");
+        setWeeks(w); setData(d);
+        const MONTHS = ['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'];
+        const today = new Date(); today.setHours(0,0,0,0);
+        const toDate = lbl => {
+          const p = lbl.trim().split(' ');
+          if (p.length !== 2) return null;
+          const yr = today.getFullYear();
+          const dt = new Date(yr, MONTHS.indexOf(p[1]), parseInt(p[0], 10));
+          if (dt - today > 183 * 86400000) dt.setFullYear(yr - 1);
+          return dt;
+        };
+        let best = w[0];
+        for (const wk of w) { const dt = toDate(wk); if (dt && dt <= today) best = wk; }
+        setWeek(best);
+        setStatus("ok");
+      })
+      .catch(e => setStatus(e.message === "empty" ? "empty" : "error"));
+  }, []);
+
+  const d = week ? data[week] : null;
+  const T = TARGETS;
+
+  const weeklyKPIs = d ? [
+    { label: "New CRM contacts added",              actual: d.crmContacts,      target: T.crmContacts,      unit: " contacts" },
+    { label: "Outreach & follow-up actions",        actual: d.outreachActions,  target: T.outreachActions,  unit: " actions"  },
+    { label: "Retail partners researched & contacted", actual: d.retailPartners, target: T.retailPartners,  unit: " partners" },
+    { label: "LinkedIn contacts added",             actual: d.linkedinContacts, target: T.linkedinContacts, unit: " contacts" },
+    { label: "All contacts logged within 48hrs?",   yesNo: true, val: d.allLogged },
+  ] : [];
+
+  const partnershipKPIs = d ? [
+    { label: "Stakeholder meetings completed",           actual: d.stakeholderMeetings, target: T.stakeholderMeetings, unit: " meetings", monthly: true },
+    { label: "New active partnership conversations",      actual: d.partnershipConvos,   target: T.partnershipConvos,   unit: " convos",   monthly: true },
+    { label: "Confirmed opportunities secured",          actual: d.confirmedOpps,       target: T.confirmedOpps,       unit: "",          monthly: true },
+    { label: "External features / speaking progressed",  actual: d.featuresProgressed,  target: T.featuresProgressed,  unit: "",          monthly: true },
+  ] : [];
+
+  const retailKPIs = d ? [
+    { label: "New active retail conversations",      actual: d.retailConvos,   target: T.retailConvos,   unit: " convos",  monthly: true },
+    { label: "Retail test opportunity progressed",   actual: d.retailTestOpps, target: T.retailTestOpps, unit: "",         monthly: true },
+    { label: "Brand / artist collaboration lead",    actual: d.collabLeads,    target: T.collabLeads,    unit: "",         monthly: true },
+  ] : [];
+
+  const engagementKPIs = d ? [
+    { label: "Networking events attended",          actual: d.networkingEvents, target: T.networkingEvents, unit: " events", monthly: true },
+    { label: "LinkedIn post or repost published?",  yesNo: true, val: d.linkedinPost, monthly: true },
+  ] : [];
+
+  const systemsKPIs = d ? [
+    { label: "Monthly pipeline update produced?",  yesNo: true, val: d.pipelineUpdate,   monthly: true },
+    { label: "Template created or improved?",      yesNo: true, val: d.templateImproved, monthly: true },
+  ] : [];
+
+  return (
+    <div className="min-h-screen bg-gray-50">
+
+      {/* Nav */}
+      <div className="bg-black px-5 py-4 flex items-center justify-between">
+        <div>
+          <span className="text-yellow-400 font-black text-lg tracking-tight">TRASH | G✕NG</span>
+          <span className="text-gray-500 text-xs ml-3 hidden sm:inline">Partnerships KPI Tracker</span>
+        </div>
+        {weeks.length > 0 && (
+          <div className="flex items-center gap-1 bg-gray-800 rounded-lg px-2 py-1.5">
+            <button onClick={() => { const i = weeks.indexOf(week); if (i > 0) setWeek(weeks[i-1]); }}
+              className="text-gray-400 hover:text-yellow-400 px-2 text-lg font-bold leading-none transition-colors">‹</button>
+            <span className="text-white text-sm font-medium w-24 text-center">w/c {week}</span>
+            <button onClick={() => { const i = weeks.indexOf(week); if (i < weeks.length-1) setWeek(weeks[i+1]); }}
+              className="text-gray-400 hover:text-yellow-400 px-2 text-lg font-bold leading-none transition-colors">›</button>
+          </div>
+        )}
+      </div>
+
+      {/* Person banner */}
+      <div className="bg-gray-900 px-5 py-3 flex items-center gap-3">
+        <div className="w-9 h-9 rounded-full bg-yellow-400 flex items-center justify-center text-black font-black text-sm shrink-0">JB</div>
+        <div>
+          <div className="text-white font-bold text-sm">John Burley</div>
+          <div className="text-gray-400 text-xs">Partnerships & Business Development Executive · 3 days/wk</div>
+        </div>
+      </div>
+
+      {/* Tabs */}
+      <div className="bg-white border-b border-gray-200 px-5">
+        <div className="flex gap-5">
+          {[["kpis","KPI Output"],["howto","How to Update"]].map(([id, label]) => (
+            <button key={id} onClick={() => setTab(id)}
+              className={`py-3 text-sm font-bold border-b-2 transition-colors ${tab === id ? "border-yellow-400 text-black" : "border-transparent text-gray-400 hover:text-gray-700"}`}>
+              {label}
+            </button>
+          ))}
+        </div>
+      </div>
+
+      <div className="max-w-3xl mx-auto px-4 py-5 space-y-4">
+        {tab === "kpis" && (
+          <>
+            {status === "loading" && (
+              <div className="flex flex-col items-center justify-center py-24 space-y-4 text-gray-400">
+                <div className="w-8 h-8 border-4 border-yellow-400 border-t-transparent rounded-full spin" />
+                <p className="text-sm">Loading from Google Sheets…</p>
+              </div>
+            )}
+            {status === "nourl" && (
+              <div className="bg-yellow-50 border-2 border-dashed border-yellow-400 rounded-2xl p-8 text-center space-y-2">
+                <div className="text-3xl">📊</div>
+                <div className="font-bold text-yellow-800">Google Sheet not connected</div>
+                <div className="text-yellow-600 text-sm">Go to the <strong>How to Update</strong> tab for setup instructions.</div>
+              </div>
+            )}
+            {status === "error" && (
+              <div className="bg-red-50 border-2 border-red-200 rounded-2xl p-6 text-center space-y-3">
+                <div className="text-3xl">⚠️</div>
+                <div className="font-bold text-red-800">Couldn't connect — check your Apps Script URL</div>
+                <div className="text-red-600 text-sm">The URL in <code>SHEET_CSV_URL</code> returned an error. Make sure you deployed the relay script and pasted the correct web app URL.</div>
+                {SHEET_EDIT_URL && <a href={SHEET_EDIT_URL} target="_blank" rel="noopener noreferrer"
+                  className="inline-block mt-1 bg-red-600 hover:bg-red-700 text-white text-sm font-bold px-4 py-2 rounded-xl transition-colors">Open Google Sheet →</a>}
+              </div>
+            )}
+            {status === "blocked" && (
+              <div className="bg-orange-50 border-2 border-orange-200 rounded-2xl p-6 space-y-4">
+                <div className="text-center space-y-2">
+                  <div className="text-3xl">🔒</div>
+                  <div className="font-bold text-orange-800 text-lg">Sheet not publicly accessible</div>
+                  <div className="text-orange-700 text-sm">All three connection attempts failed.</div>
+                </div>
+                <div className="bg-white border border-orange-200 rounded-xl p-4 space-y-2">
+                  <p className="text-sm font-bold text-orange-900">Step 1 — Test the URL directly</p>
+                  <p className="text-sm text-orange-800">Click this link. If you see a page of text (comma-separated data), the URL is fine. If you see an error or a Google sign-in page, the sheet needs republishing.</p>
+                  <a href={SHEET_CSV_URL} target="_blank" rel="noopener noreferrer"
+                    className="inline-block bg-blue-600 hover:bg-blue-700 text-white text-xs font-bold px-4 py-2 rounded-lg transition-colors break-all">
+                    Test CSV URL →
+                  </a>
+                </div>
+                <div className="bg-white border border-orange-200 rounded-xl p-4 space-y-3">
+                  <p className="text-sm font-bold text-orange-900">Step 2 — Re-publish the sheet as CSV</p>
+                  <ol className="text-sm text-orange-800 space-y-2 list-none">
+                    <li className="flex gap-2"><span className="font-bold shrink-0">1.</span><span>Open your Google Sheet.</span></li>
+                    <li className="flex gap-2"><span className="font-bold shrink-0">2.</span><span>Click <strong>File</strong> → <strong>Share</strong> → <strong>Publish to web</strong>.</span></li>
+                    <li className="flex gap-2"><span className="font-bold shrink-0">3.</span><span>First dropdown: select <strong>Weekly Stats</strong>.</span></li>
+                    <li className="flex gap-2"><span className="font-bold shrink-0">4.</span><span>Second dropdown: select <strong>Comma-separated values (.csv)</strong>.</span></li>
+                    <li className="flex gap-2"><span className="font-bold shrink-0">5.</span><span>Click <strong>Publish</strong> → <strong>OK</strong>.</span></li>
+                    <li className="flex gap-2"><span className="font-bold shrink-0">6.</span><span>Copy the new URL it gives you — paste it here to replace the old one.</span></li>
+                  </ol>
+                </div>
+                {SHEET_EDIT_URL && <div className="text-center"><a href={SHEET_EDIT_URL} target="_blank" rel="noopener noreferrer"
+                  className="inline-block bg-orange-600 hover:bg-orange-700 text-white text-sm font-bold px-5 py-2.5 rounded-xl transition-colors">Open Google Sheet →</a></div>}
+              </div>
+            )}
+            {status === "empty" && (
+              <div className="bg-yellow-50 border-2 border-yellow-300 rounded-2xl p-6 text-center space-y-3">
+                <div className="text-3xl">📋</div>
+                <div className="font-bold text-yellow-800">Sheet connected — no data yet</div>
+                <div className="text-yellow-700 text-sm">Add at least one week of data and refresh the page.</div>
+                {SHEET_EDIT_URL && <a href={SHEET_EDIT_URL} target="_blank" rel="noopener noreferrer"
+                  className="inline-block mt-1 bg-yellow-500 hover:bg-yellow-600 text-white text-sm font-bold px-4 py-2 rounded-xl transition-colors">Open Google Sheet →</a>}
+              </div>
+            )}
+            {status === "ok" && d && (
+              <>
+                <WeekHealth d={d} />
+                <SectionCard title="📅  Weekly Activity"                         color="#1565C0" kpis={weeklyKPIs}      />
+                <SectionCard title="🤝  Partnerships & Stakeholders — Monthly"   color="#4A148C" kpis={partnershipKPIs} />
+                <SectionCard title="👗  Retail & Fashion — Monthly"              color="#1B5E20" kpis={retailKPIs}      />
+                <SectionCard title="🌐  External Engagement — Monthly"           color="#BF360C" kpis={engagementKPIs}  />
+                <SectionCard title="🗂  Systems & CRM — Monthly"                 color="#37474F" kpis={systemsKPIs}     />
+                <div className="flex flex-wrap gap-4 justify-center pt-1 pb-4">
+                  {["green","amber","red"].map(k => (
+                    <div key={k} className="flex items-center gap-1.5 text-xs text-gray-500">
+                      <div className={`w-2 h-2 rounded-full ${RAG[k].bar}`} />
+                      {RAG[k].label}
+                    </div>
+                  ))}
+                  <div className="flex items-center gap-1.5 text-xs text-gray-500">
+                    <span className="bg-gray-100 text-gray-400 rounded px-1.5 py-0.5 text-xs">monthly</span>
+                    Monthly KPI
+                  </div>
+                </div>
+              </>
+            )}
+          </>
+        )}
+        {tab === "howto" && <HowToUpdate />}
+      </div>
+
+      <div className="text-center text-xs text-gray-400 pb-8 mt-4">
+        Trash Gxng Academy CIC · Partnerships KPI Tracker
+      </div>
+    </div>
+  );
+}
+
+ReactDOM.createRoot(document.getElementById("root")).render(<App />);
+</script>
+</body>
+</html>
