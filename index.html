@@ -337,11 +337,17 @@ function loadSheetData(text) {
 // ═══════════════════════════════════════════════════════════════
 // MONTH UTILITIES
 // ═══════════════════════════════════════════════════════════════
-const MON = ['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'];
+const MON      = ['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'];
+const MON_FULL = ['January','February','March','April','May','June','July','August','September','October','November','December'];
 
 function getMonthKey(lbl) {
-  const p = lbl.trim().split(' ');
-  return (p.length===2 && MON.includes(p[1])) ? p[1] : null;
+  // Accepts "16 Jun", "16 June", "16 june" — always returns 3-letter key or null
+  const p = lbl.trim().split(/\s+/);
+  if (p.length < 2) return null;
+  const m = p[p.length - 1]; // last token is the month
+  if (MON.includes(m)) return m;
+  const fi = MON_FULL.findIndex(n => n.toLowerCase() === m.toLowerCase());
+  return fi >= 0 ? MON[fi] : null;
 }
 
 function getMonths(weeks) {
