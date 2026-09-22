@@ -1,3 +1,6 @@
+Here's the complete `index.html` — select all of this and paste it into the GitHub editor:
+
+```html
 <!DOCTYPE html>
 <html lang="en">
 <head>
@@ -350,4 +353,356 @@ function getMonths(weeks) {
   return out;
 }
 
-functio
+function weeksForMonth(weeks, mk) { return weeks.filter(w => getMonthKey(w) === mk); }
+
+function aggregateMonth(mWeeks, data) {
+  const rows = mWeeks.map(w => data[w]).filter(Boolean);
+  if (!rows.length) return null;
+  const sum = k => rows.reduce((s,r) => s+(r[k]||0), 0);
+  return {
+    crmContacts:         sum('crmContacts'),
+    outreachActions:     sum('outreachActions'),
+    retailPartners:      sum('retailPartners'),
+    linkedinContacts:    sum('linkedinContacts'),
+    allLogged:           rows.every(r => r.allLogged),
+    stakeholderMeetings: sum('stakeholderMeetings'),
+    partnershipConvos:   sum('partnershipConvos'),
+    confirmedOpps:       sum('confirmedOpps'),
+    featuresProgressed:  sum('featuresProgressed'),
+    retailConvos:        sum('retailConvos'),
+    retailTestOpps:      sum('retailTestOpps'),
+    collabLeads:         sum('collabLeads'),
+    networkingEvents:    sum('networkingEvents'),
+    linkedinPost:        rows.some(r => r.linkedinPost),
+    pipelineUpdate:      rows.some(r => r.pipelineUpdate),
+    templateImproved:    rows.some(r => r.templateImproved),
+    _n:                  rows.length,
+  };
+}
+
+function monthTargets(n) {
+  return { ...TARGETS,
+    crmContacts: TARGETS.crmContacts*n, outreachActions: TARGETS.outreachActions*n,
+    retailPartners: TARGETS.retailPartners*n, linkedinContacts: TARGETS.linkedinContacts*n,
+  };
+}
+
+// ═══════════════════════════════════════════════════════════════
+// RAG + SPARKLINE HELPERS
+// ═══════════════════════════════════════════════════════════════
+function calcPct(actual, target) {
+  if (target==null || actual==null) return null;
+  return Math.min(Math.round((actual/target)*100), 150);
+}
+function getRag(p) { return p==null?'n': p>=85?'g': p>=60?'a':'r'; }
+function ragLabel(r) {
+  return r==='g'?'▲ On Track': r==='a'?'● Close': r==='r'?'▼ Off Track':'— No Data';
+}
+
+function sparkPoints(vals) {
+  if (!vals || vals.length < 2) return null;
+  const w=64,h=20, mn=Math.min(...vals), mx=Math.max(...vals), rng=mx-mn||1;
+  return vals.map((v,i)=>`${Math.round(i/(vals.length-1)*w)},${Math.round(h-((v-mn)/rng)*(h-2)+1)}`).join(' ');
+}
+
+// ═══════════════════════════════════════════════════════════════
+// KPI CARD
+// ═══════════════════════════════════════════════════════════════
+function KpiCard({ kpi, d, targets, cv, sparkVals, view }) {
+  const { id, label, key, unit, yesNo, mo } = kpi;
+  const actual  = d ? d[key] : null;
+  const target  = targets[key];
+  const isMonth = view === 'month';
+
+  const tgtLbl = yesNo
+    ? `target: yes / ${mo ? 'month' : 'week'}`
+    : WEEKLY_KEYS.includes(key) && isMonth
+      ? `target: ${target} / month`
+      : `target: ${target}${unit ? ' '+unit : ''} / ${mo ? 'month' : 'week'}`;
+
+  let rc, rl;
+  if (yesNo) {
+    rc = actual ? 'rg' : 'rr';
+    rl = actual ? '▲ On Track' : '▼ Off Track';
+  } else {
+    const r = getRag(calcPct(actual, target));
+    rc = 'r'+r; rl = ragLabel(r);
+  }
+
+  let hero, sub;
+  if (yesNo) {
+    hero = actual
+      ? <div style={{fontSize:'20px',paddingTop:'6px',marginBottom:'6px'}}><span className="bool-yes">✓ Completed</span></div>
+      : <div style={{fontSize:'20px',paddingTop:'6px',marginBottom:'6px'}}><span className="bool-no">✗ Missed</span></div>;
+    sub = actual ? (mo?'done this month':'done this week') : (mo?'not done this month':'not done this week');
+  } else if (actual == null) {
+    hero = <div className="kc-hero dim">—</div>;
+    sub  = 'no data entered';
+  } else {
+    hero = <div className="kc-hero">{actual}</div>;
+    sub  = unit ? `${unit} ${isMonth?'this month':'this week'}` : '';
+  }
+
+  const pts = !yesNo && sparkVals ? sparkPoints(sparkVals) : null;
+
+  return (
+    <div className="kc">
+      <div className="kc-bar" style={{background:`var(${cv})`}}></div>
+      <div className="kc-top">
+        <div className="kc-meta">
+          <div className="kc-id">{id} · {label}{mo && <span className="mo-tag">mo</span>}</div>
+          <div className="kc-target">{tgtLbl}</div>
+        </div>
+        <div className={`rag ${rc}`}><span className="rag-dot">●</span> {rl}</div>
+      </div>
+      {hero}
+      {sub && <div className="kc-sub">{sub}</div>}
+      {pts && (
+        <div className="kc-foot">
+          <svg className="spark" width="64" height="20" viewBox="0 0 64 20">
+            <polyline points={pts} fill="none" stroke={`var(${cv})`} strokeWidth="1.5" strokeLinejoin="round" strokeLinecap="round"/>
+          </svg>
+        </div>
+      )}
+    </div>
+  );
+}
+
+// ═══════════════════════════════════════════════════════════════
+// SECTION BAND
+// ═══════════════════════════════════════════════════════════════
+function SectionBand({ sec, d, targets, allData, weeks, view }) {
+  if (!d) return null;
+  return (
+    <div className="section-band">
+      <div className="section-hdr">
+        <div className="section-title" style={{borderColor:`rgba(${sec.cr},0.4)`,color:`rgba(${sec.cr},0.85)`}}>{sec.title}</div>
+        <div className="section-count">{sec.kpis.length} KPIs</div>
+        <div className="section-freq">{sec.freq}</div>
+      </div>
+      <div className="kpi-grid">
+        {sec.kpis.map(kpi => {
+          const sv = !kpi.yesNo && weeks.length >= 2
+            ? weeks.slice(-8).map(w => allData[w]?.[kpi.key] ?? 0)
+            : null;
+          return <KpiCard key={kpi.id} kpi={kpi} d={d} targets={targets} cv={sec.cv} sparkVals={sv} view={view} />;
+        })}
+      </div>
+    </div>
+  );
+}
+
+// ═══════════════════════════════════════════════════════════════
+// HEALTH BANNER (week view only)
+// ═══════════════════════════════════════════════════════════════
+function HealthBanner({ d, targets }) {
+  if (!d) return null;
+  const checks = [
+    d.crmContacts>=targets.crmContacts, d.outreachActions>=targets.outreachActions,
+    d.retailPartners>=targets.retailPartners, d.linkedinContacts>=targets.linkedinContacts,
+    d.allLogged,
+  ];
+  const met=checks.filter(Boolean).length, pct=Math.round((met/checks.length)*100);
+  const col  = pct>=85?'var(--g)':pct>=60?'var(--a)':'var(--r)';
+  const bcol = pct>=85?'rgba(52,210,122,0.2)':pct>=60?'rgba(240,180,41,0.2)':'rgba(224,82,82,0.2)';
+  const bg   = pct>=85?'rgba(52,210,122,0.06)':pct>=60?'rgba(240,180,41,0.06)':'rgba(224,82,82,0.06)';
+  return (
+    <div className="health-banner" style={{background:bg,borderColor:bcol,color:col}}>
+      <div>
+        <div className="health-label">Weekly Activity Health</div>
+        <div className="health-pct">{pct}%</div>
+        <div className="health-sub">{met} of {checks.length} weekly targets hit</div>
+      </div>
+      <svg viewBox="0 0 36 36" style={{width:'64px',height:'64px',transform:'rotate(-90deg)',flexShrink:0}}>
+        <circle cx="18" cy="18" r="15.9" fill="none" stroke="rgba(255,255,255,0.07)" strokeWidth="3.5"/>
+        <circle cx="18" cy="18" r="15.9" fill="none" strokeWidth="3.5"
+          strokeDasharray={`${pct} ${100-pct}`} strokeLinecap="round" stroke={col}/>
+      </svg>
+    </div>
+  );
+}
+
+// ═══════════════════════════════════════════════════════════════
+// STAT CHIPS
+// ═══════════════════════════════════════════════════════════════
+function StatChips({ d, targets }) {
+  if (!d) return null;
+  const cnt = {g:0,a:0,r:0,n:0};
+  SECTIONS.forEach(sec => sec.kpis.forEach(kpi => {
+    const actual = d[kpi.key];
+    const r = kpi.yesNo ? (actual?'g':'r') : getRag(calcPct(actual, targets[kpi.key]));
+    cnt[r]++;
+  }));
+  return (
+    <div className="stat-row">
+      <div className="stat-chip"><div className="pip" style={{background:'var(--g)',boxShadow:'0 0 4px var(--g)'}}></div><b>{cnt.g}</b>&nbsp;On Track</div>
+      <div className="stat-chip"><div className="pip" style={{background:'var(--a)',boxShadow:'0 0 4px var(--a)'}}></div><b>{cnt.a}</b>&nbsp;Close</div>
+      <div className="stat-chip"><div className="pip" style={{background:'var(--r)',boxShadow:'0 0 4px var(--r)'}}></div><b>{cnt.r}</b>&nbsp;Off Track</div>
+      {cnt.n>0 && <div className="stat-chip"><div className="pip" style={{background:'var(--gr)'}}></div><b>{cnt.n}</b>&nbsp;No Data</div>}
+    </div>
+  );
+}
+
+// ═══════════════════════════════════════════════════════════════
+// MAIN APP
+// ═══════════════════════════════════════════════════════════════
+function App() {
+  const [weeks,  setWeeks]  = useState([]);
+  const [data,   setData]   = useState({});
+  const [week,   setWeek]   = useState(null);
+  const [month,  setMonth]  = useState(null);
+  const [view,   setView]   = useState('week');
+  const [status, setStatus] = useState('loading');
+
+  useEffect(() => {
+    if (!SHEET_CSV_URL) { setStatus('nourl'); return; }
+    fetch(SHEET_CSV_URL)
+      .then(r => { if (!r.ok) throw new Error('http'); return r.text(); })
+      .then(text => {
+        const { weeks:w, data:d } = loadSheetData(text);
+        if (!w.length) throw new Error('empty');
+        setWeeks(w); setData(d);
+        const MIDX = {Jan:0,Feb:1,Mar:2,Apr:3,May:4,Jun:5,Jul:6,Aug:7,Sep:8,Oct:9,Nov:10,Dec:11};
+        const today = new Date(); today.setHours(0,0,0,0);
+        const toDate = lbl => {
+          const p = lbl.trim().split(' '); if (p.length!==2) return null;
+          const yr = today.getFullYear();
+          const dt = new Date(yr, MIDX[p[1]]??0, parseInt(p[0],10));
+          if (dt-today > 183*86400000) dt.setFullYear(yr-1);
+          return dt;
+        };
+        let best = w[0];
+        for (const wk of w) { const dt=toDate(wk); if (dt && dt<=today) best=wk; }
+        setWeek(best);
+        setMonth(getMonthKey(best));
+        setStatus('ok');
+      })
+      .catch(e => setStatus(e.message==='empty'?'empty':'error'));
+  }, []);
+
+  const months = useMemo(() => getMonths(weeks), [weeks]);
+
+  const currentData = useMemo(() => {
+    if (view==='week') return week ? data[week] : null;
+    if (view==='month' && month) return aggregateMonth(weeksForMonth(weeks, month), data);
+    return null;
+  }, [view, week, month, weeks, data]);
+
+  const targets = useMemo(() => (
+    view==='month' && currentData?._n ? monthTargets(currentData._n) : TARGETS
+  ), [view, currentData]);
+
+  const wIdx = weeks.indexOf(week),  mIdx = months.indexOf(month);
+  function prevWeek()  { if (wIdx>0)              setWeek(weeks[wIdx-1]);   }
+  function nextWeek()  { if (wIdx<weeks.length-1)  setWeek(weeks[wIdx+1]);   }
+  function prevMonth() { if (mIdx>0)              setMonth(months[mIdx-1]); }
+  function nextMonth() { if (mIdx<months.length-1) setMonth(months[mIdx+1]); }
+  const onPrev  = view==='week' ? prevWeek  : prevMonth;
+  const onNext  = view==='week' ? nextWeek  : nextMonth;
+  const canPrev = view==='week' ? wIdx>0              : mIdx>0;
+  const canNext = view==='week' ? wIdx<weeks.length-1 : mIdx<months.length-1;
+  const navLbl  = view==='week' ? week                : month;
+
+  const h1  = view==='week'  ? `Week of ${week||'…'}` : `${month||'…'} — Monthly View`;
+  const sub = view==='week'
+    ? `w/c ${week||''} · 16 metrics across 5 sections`
+    : `${currentData?._n??'?'} weeks of data · 16 metrics · aggregated totals`;
+
+  if (status==='loading') return (
+    <div className="state-wrap">
+      <div className="state-card">
+        <div className="spin-ring"></div>
+        <div className="state-title">Loading…</div>
+        <div className="state-sub">Fetching from Google Sheets</div>
+      </div>
+    </div>
+  );
+  if (status==='nourl') return (
+    <div className="state-wrap">
+      <div className="state-card">
+        <div className="state-icon">📊</div>
+        <div className="state-title">Sheet Not Connected</div>
+        <div className="state-sub">Paste your Apps Script URL into SHEET_CSV_URL at the top of this file.</div>
+      </div>
+    </div>
+  );
+  if (status==='error') return (
+    <div className="state-wrap">
+      <div className="state-card">
+        <div className="state-icon">⚠️</div>
+        <div className="state-title">Connection Error</div>
+        <div className="state-sub">Couldn't reach the Google Sheet. Check your Apps Script URL is deployed as a public web app.</div>
+        <a href={SHEET_EDIT_URL} target="_blank" rel="noopener noreferrer" className="state-btn">Open Google Sheet →</a>
+      </div>
+    </div>
+  );
+  if (status==='empty') return (
+    <div className="state-wrap">
+      <div className="state-card">
+        <div className="state-icon">📋</div>
+        <div className="state-title">No Data Yet</div>
+        <div className="state-sub">Sheet connected — add at least one week row and refresh.</div>
+        <a href={SHEET_EDIT_URL} target="_blank" rel="noopener noreferrer" className="state-btn">Open Sheet →</a>
+      </div>
+    </div>
+  );
+
+  return (
+    <>
+      <header className="topbar">
+        <div style={{display:'flex',alignItems:'center',gap:'14px'}}>
+          <div className="wordmark">TRASH <em>|</em> G✕NG</div>
+          <div className="topbar-pill">
+            <div className="status-dot"></div>
+            <span>Live</span> · Partnerships
+          </div>
+        </div>
+        <div className="topbar-right">
+          <a href={SHEET_EDIT_URL} target="_blank" rel="noopener noreferrer" className="icon-btn" title="Open Google Sheet">📊</a>
+        </div>
+      </header>
+
+      <div className="page-header">
+        <div className="header-left">
+          <div className="eyebrow">Partnerships KPI</div>
+          <h1 className="page-h1">{h1}</h1>
+          <div className="page-sub">{sub}</div>
+          <div className="person-row">
+            <div className="avatar">JB</div>
+            <div>
+              <div className="person-name">John Burley</div>
+              <div className="person-role">Partnerships & Business Development · 3 days/wk</div>
+            </div>
+          </div>
+          <StatChips d={currentData} targets={targets} />
+        </div>
+        <div className="header-right">
+          <div className="seg-toggle">
+            <button className={`seg-btn${view==='week'?' active':''}`} onClick={()=>setView('week')}>Week</button>
+            <button className={`seg-btn${view==='month'?' active':''}`} onClick={()=>setView('month')}>Month</button>
+          </div>
+          {weeks.length>0 && (
+            <div className="week-nav">
+              <button onClick={onPrev} disabled={!canPrev}>‹</button>
+              <span>{navLbl||'…'}</span>
+              <button onClick={onNext} disabled={!canNext}>›</button>
+            </div>
+          )}
+        </div>
+      </div>
+
+      <main className="content">
+        {view==='week' && <HealthBanner d={currentData} targets={targets} />}
+        {SECTIONS.map(sec => (
+          <SectionBand key={sec.title} sec={sec} d={currentData} targets={targets}
+            allData={data} weeks={weeks} view={view} />
+        ))}
+      </main>
+    </>
+  );
+}
+
+ReactDOM.createRoot(document.getElementById('root')).render(<App />);
+</script>
+</body>
+</html>
